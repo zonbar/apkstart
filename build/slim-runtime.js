@@ -59,8 +59,9 @@ function sizeOf(p) {
 }
 
 function slim(root, { aggressive = false, dryRun = false, log = console.log } = {}) {
-  if (!fs.existsSync(path.join(root, 'emulator', 'emulator.exe'))) {
-    throw new Error(`${root} 不是一个运行时目录（缺 emulator/emulator.exe）`);
+  const emuName = require('../src/core/platform').exe('emulator');
+  if (!fs.existsSync(path.join(root, 'emulator', emuName))) {
+    throw new Error(`${root} 不是一个运行时目录（缺 emulator/${emuName}）`);
   }
   const list = aggressive ? SAFE.concat(AGGRESSIVE) : SAFE;
   let freed = 0;

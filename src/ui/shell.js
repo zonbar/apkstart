@@ -3,6 +3,10 @@
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
 
+if ((api && (api.isMac || api.platform === 'darwin')) || /Mac/i.test(navigator.platform || '')) {
+  document.documentElement.classList.add('is-mac');
+}
+
 const btn = {
   rotate: $('btnRotate'),
   min: $('btnMin'),

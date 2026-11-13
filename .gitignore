@@ -1,7 +1,7 @@
 node_modules/
 dist/
 build/runtime/
-.workbuddy/
+build/.test-tmp/
 test/out/
 test/fixtures/
 test/*.png

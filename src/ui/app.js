@@ -3,6 +3,12 @@
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
 
+// macOS 隐藏式标题栏的红黄绿按钮由系统绘制、浮在页面左上角，
+// 加这个类让 CSS 给它们留出安全区；Windows 保持原有布局。
+if ((api && (api.isMac || api.platform === 'darwin')) || /Mac/i.test(navigator.platform || '')) {
+  document.documentElement.classList.add('is-mac');
+}
+
 const state = {
   apps: [],
   settings: null,
@@ -740,7 +746,7 @@ function bindSettings() {
     const r = await api.rebuildShortcuts();
     toast({
       title: r && r.fixed && r.fixed.length ? '已补齐快捷方式' : '快捷方式都还在',
-      body: r && r.fixed && r.fixed.length ? r.fixed.join('、') : '桌面与开始菜单入口正常',
+      body: r && r.fixed && r.fixed.length ? r.fixed.join('、') : '桌面与应用程序目录入口正常',
       type: 'ok',
     });
   });

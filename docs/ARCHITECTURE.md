@@ -1,5 +1,9 @@
 # 架构
 
+> 本文描述的是原始 Windows 实现链路（`WinAgent` / `SetParent` / `.lnk` /
+> WHPX / AEHD）。macOS 移植后的平台差异与对照表见仓库根目录
+> [README.md](../README.md) 的「macOS 与 Windows 的差异」一节。
+
 ## 分层
 
 ```

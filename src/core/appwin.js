@@ -10,6 +10,8 @@ const { BrowserWindow, screen, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { hookOptions } = require('./pointer');
+const { pathToFileURL } = require('url');
+const P = require('./platform');
 
 const TITLEBAR_H = 38;
 /**
@@ -22,7 +24,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function iconUrl(p) {
   if (!p || !fs.existsSync(p)) return '';
-  return `file:///${p.replace(/\\/g, '/').replace(/ /g, '%20')}?v=${fs.statSync(p).mtimeMs}`;
+  return `${pathToFileURL(p).href}?v=${fs.statSync(p).mtimeMs}`;
 }
 
 class AppWindow {
@@ -104,7 +106,7 @@ class AppWindow {
       y: Math.round(area.y + (area.h - h) / 2),
       show: false,
       frame: false,
-      thickFrame: true,
+      thickFrame: !P.IS_MAC,
       resizable: true,
       maximizable: true,
       backgroundColor: '#0b0c0e',
@@ -206,9 +208,10 @@ class AppWindow {
   /** 把模拟器窗口嵌进当前窗口，并铺满标题栏以下的区域 */
   async embed() {
     if (!this.isOpen) return false;
-    const hwnd = this._hwnd();
-    if (!hwnd) return false;
-    const r = await this.agent.embed(hwnd, this._rect()).catch(() => null);
+    // macOS 没有 HWND / SetParent：交给 MacAgent 用 AppleScript 摆独立原生窗口
+    const host = P.IS_MAC ? 'darwin' : this._hwnd();
+    if (!host) return false;
+    const r = await this.agent.embed(host, this._rect()).catch(() => null);
     return !!(r && r.ok);
   }
 
@@ -219,6 +222,11 @@ class AppWindow {
 
   /** 模拟器子窗口应该占据的矩形（物理像素，已把 8px 内边距推出可视区） */
   _rect() {
+    if (P.IS_MAC) {
+      // 独立窗口模式：给的是屏幕绝对坐标，不是嵌入时的客户区偏移
+      const b = this.win.getBounds();
+      return { x: b.x, y: b.y + TITLEBAR_H, w: b.width, h: Math.max(420, b.height - TITLEBAR_H) };
+    }
     const sf = this._scale();
     const b = this.win.getContentBounds();
     return {

@@ -2,7 +2,7 @@
   "name": "apkstart",
   "productName": "ApkStart",
   "version": "0.2.7",
-  "description": "极致轻量的 Windows 安卓应用运行器：双击 APK 即装，应用以独立窗口与桌面图标运行",
+  "description": "macOS 原生安卓应用运行器（兼容 Windows）：双击 APK 即装，应用以独立窗口与桌面图标运行",
   "main": "src/main.js",
   "author": "RoutineMiku",
   "license": "MIT",
@@ -20,6 +20,9 @@
     "emulator",
     "apk",
     "windows",
+    "macos",
+    "darwin",
+    "apple-silicon",
     "qemu",
     "electron",
     "wsa",
@@ -29,13 +32,21 @@
     "node": ">=20"
   },
   "os": [
-    "win32"
+    "win32",
+    "darwin"
   ],
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "node test/run-tests.js && node test/engine-test.js && node test/auto-test.js",
     "pack": "node build/pack.js",
+    "pack:mac": "node build/pack-mac.js",
+    "build:mac": "node build/pack-mac.js && node build/dist-mac.js",
+    "build:mac:arm64": "APKSTART_MAC_ARCH=arm64 node build/pack-mac.js && node build/dist-mac.js",
+    "build:mac:x64": "APKSTART_MAC_ARCH=x64 node build/pack-mac.js && node build/dist-mac.js",
+    "build:mac:builder": "electron-builder --mac dmg zip --arm64 --x64 --config electron-builder.mac.yml",
+    "build:mac:builder:arm64": "electron-builder --mac dmg zip --arm64 --config electron-builder.mac.yml",
+    "build:mac:builder:x64": "electron-builder --mac dmg zip --x64 --config electron-builder.mac.yml",
     "runtime": "node build/prepare-runtime.js",
     "build:exe": "node build/prepare-runtime.js && electron-builder --win nsis",
     "selftest": "node scripts/selftest.js",

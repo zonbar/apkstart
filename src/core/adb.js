@@ -8,8 +8,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const P = require('./platform');
 
-const COMMON_ADB_PATHS = [
+const COMMON_ADB_PATHS = P.IS_MAC ? [
+  path.join(os.homedir(), 'Library', 'Android', 'sdk', 'platform-tools', 'adb'),
+  '/opt/homebrew/bin/adb',
+  '/usr/local/bin/adb',
+] : [
   path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
   'C:\\Android\\platform-tools\\adb.exe',
   'C:\\adb\\adb.exe',
@@ -139,7 +144,7 @@ class AdbClient {
   static resolveAdb(explicit, appRoot) {
     const candidates = [
       explicit,
-      appRoot && path.join(appRoot, 'tools', 'platform-tools', 'adb.exe'),
+      appRoot && path.join(appRoot, 'tools', 'platform-tools', P.exe('adb')),
       ...COMMON_ADB_PATHS,
     ].filter(Boolean);
     for (const c of candidates) {

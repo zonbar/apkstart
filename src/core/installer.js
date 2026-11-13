@@ -10,7 +10,8 @@ const crypto = require('crypto');
 const store = require('./store');
 const { parseApk } = require('./apk');
 const { ZipArchive } = require('./zip');
-const { iconToIco, writeShortcut, removeShortcut, safeFileName } = require('./shortcut');
+const { iconToIco, iconToIcns, writeShortcut, removeShortcut, safeFileName } = require('./shortcut');
+const P = require('./platform');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,12 +68,12 @@ class Installer {
 
   iconFile(pkg) { return store.iconPath(pkg); }
 
-  icoFile(pkg) { return path.join(store.ICON_DIR, `${pkg}.ico`); }
+  icoFile(pkg) { return path.join(store.ICON_DIR, `${pkg}${P.IS_MAC ? '.icns' : '.ico'}`); }
 
   shortcutPath(app) {
     const s = store.getSettings();
     const dir = s.shortcutDir && s.shortcutDir.trim() ? s.shortcutDir : this.ctx.desktopDir;
-    return path.join(dir, `${safeFileName(app.label)}.lnk`);
+    return path.join(dir, `${safeFileName(app.label)}${P.IS_MAC ? '.app' : '.lnk'}`);
   }
 
   /**
@@ -85,7 +86,7 @@ class Installer {
     if (this.ctx.startMenuDir && store.getSettings().createStartMenuShortcut !== false) {
       // 放在独立子目录：既能被 Windows 搜索索引到，又不会覆盖同名第三方应用的快捷方式
       // （实测「红果免费短剧」在开始菜单里已被另一个桌面助手占用）
-      out.push(path.join(this.ctx.startMenuDir, 'ApkStart', `${safeFileName(app.label)}.lnk`));
+      out.push(path.join(this.ctx.startMenuDir, 'ApkStart', `${safeFileName(app.label)}${P.IS_MAC ? '.app' : '.lnk'}`));
     }
     return [...new Set(out)];
   }
@@ -209,10 +210,12 @@ class Installer {
         fs.writeFileSync(iconPath, meta.iconPng);
       } catch (_) { /* ignore */ }
       try {
-        const ico = await iconToIco(meta.iconPng, { decode: this.ctx.decodeIcon });
-        if (ico) {
+        const conv = P.IS_MAC
+          ? await iconToIcns(meta.iconPng, { decode: this.ctx.decodeIcon })
+          : await iconToIco(meta.iconPng, { decode: this.ctx.decodeIcon });
+        if (conv) {
           icoPath = this.icoFile(meta.package);
-          fs.writeFileSync(icoPath, ico);
+          fs.writeFileSync(icoPath, conv);
         }
       } catch (_) { /* 图标失败不影响安装 */ }
     }
@@ -293,6 +296,7 @@ class Installer {
           target,
           args,
           iconIcoPath: ico,
+          iconPngPath: app.iconPath,
           description: `${app.label} — 由 ApkStart 运行`,
           cwd: this.ctx.cwd,
           // 每个应用一个 AUMID：任务栏上按应用分组，不会全挤到 ApkStart 里
@@ -316,7 +320,9 @@ class Installer {
       let dirty = false;
       if ((!app.icoPath || !fs.existsSync(app.icoPath)) && app.iconPath && fs.existsSync(app.iconPath)) {
         try {
-          const ico = await iconToIco(fs.readFileSync(app.iconPath), { decode: this.ctx.decodeIcon });
+          const ico = P.IS_MAC
+            ? await iconToIcns(fs.readFileSync(app.iconPath), { decode: this.ctx.decodeIcon })
+            : await iconToIco(fs.readFileSync(app.iconPath), { decode: this.ctx.decodeIcon });
           if (ico) {
             const p = this.icoFile(app.package);
             fs.writeFileSync(p, ico);

@@ -37,7 +37,7 @@ function hostInfo() {
     home,
     homeAscii: isAsciiPath(home),
     tmp: os.tmpdir(),
-    rdp: /RDP/i.test(String(process.env.SESSIONNAME || '')) || !!process.env.CLIENTNAME,
+    rdp: !require('./platform').IS_MAC && (/RDP/i.test(String(process.env.SESSIONNAME || '')) || !!process.env.CLIENTNAME),
   };
 }
 

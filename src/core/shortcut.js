@@ -137,6 +137,8 @@ async function iconToIco(raw, { decode } = {}) {
  * @param {object} opt { shortcutPath, target, args, iconIcoPath, description, cwd }
  */
 function writeShortcut(opt) {
+  const P = require('./platform');
+  if (P.IS_MAC) return P.writeShortcut(opt);
   const { shell } = require('electron');
   const dir = path.dirname(opt.shortcutPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -157,6 +159,8 @@ function writeShortcut(opt) {
 }
 
 function removeShortcut(p) {
+  const P = require('./platform');
+  if (P.IS_MAC) return P.removeShortcut(p);
   try {
     if (p && fs.existsSync(p)) fs.unlinkSync(p);
     return true;
@@ -165,7 +169,27 @@ function removeShortcut(p) {
   }
 }
 
+/** macOS 版：任意 APK 图标 -> icns（WebP 走渲染进程解码） */
+async function iconToIcns(raw, { decode } = {}) {
+  const P = require('./platform');
+  if (!Buffer.isBuffer(raw) || !raw.length) return null;
+  let icns = P.pngToIcns(raw);
+  if (!icns && typeof decode === 'function') {
+    try {
+      const png = await decode(raw);
+      if (Buffer.isBuffer(png) && png.length) icns = P.pngToIcns(png);
+    } catch (_) { /* 解码失败走占位图 */ }
+  }
+  if (!icns) {
+    try {
+      const { drawAppIcon } = require('./png');
+      icns = P.pngToIcns(drawAppIcon(256));
+    } catch (_) { /* 占位图也失败就返回 null */ }
+  }
+  return icns;
+}
+
 module.exports = {
-  pngToIco, pngBytesToIco, iconToIco,
+  pngToIco, pngBytesToIco, iconToIco, iconToIcns,
   writeShortcut, removeShortcut, safeFileName, ICO_SIZES,
 };

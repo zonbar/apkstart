@@ -10,7 +10,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const UA = 'ApkStart/0.2 (Windows; +https://github.com/apkstart)';
+const UA = `ApkStart/0.2 (${require('./platform').IS_MAC ? 'Macintosh' : 'Windows'}; +https://github.com/apkstart)`;
 
 function openStream(url, { method = 'GET', headers = {}, redirects = 0 } = {}) {
   return new Promise((resolve, reject) => {

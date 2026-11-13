@@ -209,4 +209,106 @@ class WinAgent extends EventEmitter {
   }
 }
 
-module.exports = { WinAgent, AGENT_SCRIPT: SCRIPT };
+/**
+ * macOS 窗口代理。
+ *
+ * macOS 没有 Win32 的 SetParent：把别的进程的 Qt 窗口嵌进 Electron 窗口，
+ * 只能靠注入 + NSWindow addChildWindow，稳定性与权限代价都不可接受。
+ * 因此这里让 emulator 以独立原生窗口运行，用 AppleScript(System Events)
+ * 负责定位 / 尺寸 / 显隐 / 置前，Electron 窗口作为标题栏壳层跟随。
+ *
+ * System Events 控制其它进程窗口需要「辅助功能」授权一次；未授权时所有
+ * 调用静默降级（返回 null），应用依然可以安装、启动、使用。
+ */
+const { execFile } = require('child_process');
+
+class MacAgent extends EventEmitter {
+  constructor() {
+    super();
+    this.hooked = false;
+    this.hookConf = null;
+    this._rect = null;
+    this._title = '';
+  }
+
+  get available() { return process.platform === 'darwin'; }
+
+  ensure() { return Promise.resolve(this); }
+
+  _osa(body) {
+    const script = `tell application "System Events"
+  if not (exists process "emulator") then return "NO"
+  tell process "emulator"
+    if (count of windows) is 0 then return "NO"
+${body}
+  end tell
+end tell`;
+    return new Promise((resolve) => {
+      execFile('/usr/bin/osascript', ['-e', script], { timeout: 6000 }, (err, out) => {
+        resolve(err ? null : String(out || '').trim());
+      });
+    });
+  }
+
+  async embed(host, rect) {
+    this._rect = rect || null;
+    await this.fit(rect);
+    await this.show();
+    // embedded:false 明确告诉上层：画面在独立原生窗口里，不是子窗口
+    return { ok: true, embedded: false, platform: 'darwin' };
+  }
+
+  async fit(rect) {
+    if (!rect) return { ok: false };
+    this._rect = rect;
+    const x = Math.round(rect.x || 0);
+    const y = Math.round(rect.y || 0);
+    const w = Math.max(320, Math.round(rect.w || 540));
+    const h = Math.max(420, Math.round(rect.h || 960));
+    const r = await this._osa(
+      `    set position of window 1 to {${x}, ${y}}\n`
+      + `    set size of window 1 to {${w}, ${h}}\n`
+      + '    return "OK"',
+    );
+    return { ok: r === 'OK' };
+  }
+
+  async show() {
+    const r = await this._osa(
+      '    set visible of window 1 to true\n'
+      + '    set frontmost to true\n'
+      + '    return "OK"',
+    );
+    return { ok: r === 'OK' };
+  }
+
+  async hide() {
+    const r = await this._osa('    set visible of window 1 to false\n    return "OK"');
+    return { ok: r === 'OK' };
+  }
+
+  async focus() { return this.show(); }
+
+  async rotate() { return { ok: false }; }
+
+  async probe() {
+    const r = await this._osa('    return name of window 1');
+    return { ok: !!r, name: r || '' };
+  }
+
+  async setHook() {
+    // macOS 没有 WH_MOUSE_LL 等价物；全局 CGEventTap 需要辅助功能授权且会介入
+    // 系统每一次事件。这里保持关闭，右键返回由 Android 侧按键处理。
+    this.hooked = false;
+    return false;
+  }
+
+  async detach() { return true; }
+
+  dispose() {
+    this.hooked = false;
+    this.hookConf = null;
+  }
+}
+
+module.exports = { WinAgent, MacAgent, AGENT_SCRIPT: SCRIPT };

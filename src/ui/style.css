@@ -54,6 +54,17 @@ body {
   padding-right: 148px; /* 给系统窗口按钮留位 */
 }
 
+/* macOS：系统交通灯浮在标题栏左上角（x≈14..66），右侧没有系统窗口按钮。
+   Windows 那 148px 右留白会把设置按钮挤到窗口中间，这里还原；
+   左侧让出 84px，避免红黄绿按钮压住 logo 和品牌名。 */
+.is-mac .titlebar {
+  padding-left: 84px;
+  padding-right: 14px;
+}
+.is-mac body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+}
+
 .brand { display: flex; align-items: center; gap: 8px; }
 .logo { display: flex; }
 .logo img {
@@ -303,7 +314,9 @@ body {
   padding: 11px 13px;
   animation: slide-in .18s ease-out;
 }
-@keyframes slide-in { from { opacity: 0; transform: translateY(6px); } }
+/* 淡入只做位移：窗口未聚焦 / 后台节流时 CSS 动画可能停在 from 帧，
+   若动画里带 opacity，弹层会半透明，背后内容会透上来和前景文字叠在一起。 */
+@keyframes slide-in { from { transform: translateY(6px); } }
 .toast .t-title { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
 .toast .t-body { margin-top: 4px; font-size: 11.5px; color: var(--muted); line-height: 1.55; word-break: break-all; }
 .toast.error .t-title { color: var(--danger); }
@@ -387,7 +400,7 @@ body {
   overflow: hidden;
   animation: pop .16s ease-out;
 }
-@keyframes pop { from { opacity: 0; transform: scale(.985) translateY(4px); } }
+@keyframes pop { from { transform: scale(.985) translateY(4px); } }
 
 .modal-head {
   flex: 0 0 auto;

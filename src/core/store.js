@@ -1,13 +1,13 @@
 'use strict';
 /**
  * 本地持久化：应用清单 + 设置
- * 数据目录：%APPDATA%\apkstart
+ * 数据目录：Windows %APPDATA%\apkstart / macOS ~/Library/Application Support/ApkStart
  */
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const DATA_DIR = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'apkstart');
+const DATA_DIR = require('./platform').dataDir();
 const ICON_DIR = path.join(DATA_DIR, 'icons');
 const APK_DIR = path.join(DATA_DIR, 'apks');
 const APPS_FILE = path.join(DATA_DIR, 'apps.json');

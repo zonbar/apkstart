@@ -38,6 +38,9 @@ try {
  * @param {string} [extraArgs] 开发模式下需要先传应用目录，例如 "\"C:\\path\\apkstart\""
  */
 function registerAssociation(exePath, iconPath, extraArgs) {
+  if (require('./platform').IS_MAC) {
+    return { ok: true, progId: PROGID, note: 'macOS 由 Info.plist 声明 .apk 关联，无需运行时注册' };
+  }
   const classes = 'HKCU\\Software\\Classes';
   const icon = iconPath || exePath;
   const command = `"${exePath}" ${extraArgs ? extraArgs + ' ' : ''}"%1"`;
@@ -56,6 +59,7 @@ function registerAssociation(exePath, iconPath, extraArgs) {
 }
 
 function unregisterAssociation() {
+  if (require('./platform').IS_MAC) return { ok: true, note: 'macOS 文件关联由 Info.plist 声明' };
   const classes = 'HKCU\\Software\\Classes';
   reg(['delete', `${classes}\\${EXT}\\OpenWithProgids`, '/v', PROGID, '/f']);
   reg(['delete', `${classes}\\${PROGID}`, '/f']);

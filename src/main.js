@@ -13,6 +13,7 @@ const { Installer } = require('./core/installer');
 const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
+const P = require('./core/platform');
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -30,14 +31,14 @@ function loadBrandIcon(size) {
 const assoc = require('./core/assoc');
 const windowctl = require('./core/windowctl');
 const display = require('./core/display');
-const { WinAgent } = require('./core/agent');
+const { WinAgent, MacAgent } = require('./core/agent');
 const pointer = require('./core/pointer');
 const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+if (P.IS_WIN) app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 // 应用窗口把模拟器以 SetParent 方式嵌进来当子窗口。Chromium 默认用
 // DirectComposition 上半透明图层（Intermediate D3D Window /
@@ -46,7 +47,7 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // 外壳界面只有一条 38px 标题栏和启动遮罩，走软件合成完全不卡，
 // 关掉硬件加速后 Chromium 直接画进 HWND，子窗口层级才真正生效。
 // 想对比效果时可以设 APKSTART_HWACCEL=1 启动。
-if (process.env.APKSTART_HWACCEL !== '1') app.disableHardwareAcceleration();
+if (P.IS_WIN && process.env.APKSTART_HWACCEL !== '1') app.disableHardwareAcceleration();
 
 const APP_ROOT = path.join(__dirname, '..');
 const IS_DEV = process.argv.includes('--dev');
@@ -107,14 +108,14 @@ function bootstrapBundledRuntime() {
       return false;
     };
     const bundled = candidates.find((dir) =>
-      fs.existsSync(path.join(dir, 'emulator', 'emulator.exe')) && hasImage(dir));
+      fs.existsSync(path.join(dir, 'emulator', P.exe('emulator'))) && hasImage(dir));
     if (!bundled) return;
 
     const s = store.getSettings();
     // 旧版只在 settings.json 不存在时接管：用户先装过在线版再解压完整版，
     // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
     const current = s.runtime.dir || path.join(store.DATA_DIR, 'runtime');
-    const currentExe = path.join(current, 'emulator', 'emulator.exe');
+    const currentExe = path.join(current, 'emulator', P.exe('emulator'));
     // 便携版被移动/升级（解压到新目录）后，settings 里记的还是旧路径：
     // 必须只认「本次 EXE 所在目录下的 runtime」，否则会一直用旧包里的组件
     // （实测踩过：旧包的 emulator 缺 emulator-check → 加速探测失败 → 退回 TCG 软件模拟）。
@@ -160,6 +161,7 @@ let quitting = false;
 let winAgent = null;
 let appWin = null;
 let notifier = null;
+let pendingOpenFile = null;
 let androidSet = null;
 
 // ---------------- 命令行解析 ----------------
@@ -205,15 +207,20 @@ function applyAutoStart() {
   if (!app.isPackaged) return; // 开发时不写注册表
   const on = !!store.getSettings().autoStart;
   try {
-    // 必须显式给 name，否则注册表里的启动项会叫 "electron.app.Electron"
-    app.setLoginItemSettings({
-      openAtLogin: on,
-      name: 'ApkStart',
-      path: process.execPath,
-      args: ['--autostart'],
-    });
-    // 清掉旧版本（没传 name）留下的那条，避免重复启动
-    app.setLoginItemSettings({ openAtLogin: false, name: 'electron.app.Electron' });
+    if (P.IS_MAC) {
+      // macOS 只认 openAtLogin / openAsHidden，name / path / args 会被忽略
+      app.setLoginItemSettings({ openAtLogin: on, openAsHidden: true });
+    } else {
+      // 必须显式给 name，否则注册表里的启动项会叫 "electron.app.Electron"
+      app.setLoginItemSettings({
+        openAtLogin: on,
+        name: 'ApkStart',
+        path: process.execPath,
+        args: ['--autostart'],
+      });
+      // 清掉旧版本（没传 name）留下的那条，避免重复启动
+      app.setLoginItemSettings({ openAtLogin: false, name: 'electron.app.Electron' });
+    }
   } catch (_) { /* 组策略禁止时忽略 */ }
 }
 
@@ -259,11 +266,11 @@ function openAppWindow(pkg, tip) {
   appWin.open({
     pkg,
     label: (rec && rec.label) || pkg,
-    iconPath: rec && rec.icoPath,
+    iconPath: rec && (P.IS_MAC ? rec.iconPath : rec.icoPath),
     portrait: portraitSize(),
     fullscreen: displaySettings().mode === 'fullscreen',
   });
-  appWin.setIcon(rec && rec.icoPath);
+  appWin.setIcon(rec && (P.IS_MAC ? rec.iconPath : rec.icoPath));
   appWin.setState({ tip: tip || '正在启动安卓运行时…', ready: false, landscape: false });
   currentAppPkg = pkg;
 }
@@ -327,8 +334,10 @@ function createWindow({ show = true } = {}) {
     show: false,
     backgroundColor: '#f7f8fa',
     frame: false,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#f7f8fa', symbolColor: '#2b3138', height: 44 },
+    titleBarStyle: P.IS_MAC ? 'hiddenInset' : 'hidden',
+    ...(P.IS_WIN ? { titleBarOverlay: { color: '#f7f8fa', symbolColor: '#2b3138', height: 44 } } : {}),
+    // 44px 标题栏内垂直居中；左边 84px 由 .is-mac .titlebar 让出
+    ...(P.IS_MAC ? { trafficLightPosition: { x: 14, y: 16 } } : {}),
     icon: nativeImage.createFromBuffer(ICON_PNG),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -338,6 +347,12 @@ function createWindow({ show = true } = {}) {
       spellcheck: false,
     },
   });
+
+  // frame:false 时部分 Electron 版本会把 hiddenInset 的交通灯一起隐藏，
+  // 显式打开，保证左上角三键一定可见（页面已为其预留 84px 安全区）。
+  if (P.IS_MAC) {
+    try { mainWindow.setWindowButtonVisibility(true); } catch (_) { /* 版本不支持则忽略 */ }
+  }
 
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
   if (show) mainWindow.once('ready-to-show', () => mainWindow.show());
@@ -405,7 +420,7 @@ function buildTray() {
         label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
         click: () => { toggleDisplayMode(); },
       },
-      { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
+      { label: '重建桌面/应用程序目录快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
       { label: '同步共享目录', click: () => sharer.sync() },
       { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
       { type: 'separator' },
@@ -422,6 +437,7 @@ function buildTray() {
   };
   tray.setToolTip('ApkStart — 安卓应用运行器');
   tray.on('double-click', () => showWindow());
+  if (P.IS_MAC) tray.on('click', () => showWindow());
   refresh();
   setInterval(refresh, 5000).unref?.();
 }
@@ -512,7 +528,7 @@ function startNotifier() {
     notifier = new NotifyBridge({
       getClient: () => runtime.client(),
       getAppLabel: (pkg) => (store.getApp(pkg) || {}).label || pkg,
-      getAppIcon: (pkg) => (store.getApp(pkg) || {}).icoPath || '',
+      getAppIcon: (pkg) => (P.IS_MAC ? (store.getApp(pkg) || {}).iconPath : (store.getApp(pkg) || {}).icoPath) || '',
       onOpen: (pkg) => {
         if (appWin && appWin.isOpen && appWin.pkg === pkg) {
           appWin.win.show();
@@ -755,6 +771,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('provision:installAehd', async () => {
+    if (P.IS_MAC) return { ok: true, note: 'macOS 使用系统内置 HVF，无需 AEHD 驱动' };
     try {
       const r = await runtime.provisioner.installAehd(
         (p) => send('provision:progress', { ...p, component: 'aehd' }),
@@ -767,6 +784,10 @@ function registerIpc() {
 
   /** 提权安装 AEHD 驱动：弹出 UAC，用户确认后静默安装 */
   ipcMain.handle('provision:enableAccel', async () => {
+    if (P.IS_MAC) {
+      const accel = await runtime.provisioner.emulatorAccel();
+      return { ok: accel.ok, accel, error: accel.ok ? '' : accel.note, note: 'macOS 使用系统内置 HVF，无需安装驱动' };
+    }
     try {
       const p = runtime.provisioner.paths();
       const bat = path.join(p.aehdDir, 'silent_install.bat');
@@ -887,6 +908,9 @@ function registerIpc() {
   });
 
   ipcMain.handle('assoc:status', () => {
+    // macOS 由 Info.plist 静态声明，不再查询注册表
+    const mac = P.assocStatus(NO_SHELL_PROBE, assoc.PROGID);
+    if (mac) return mac;
     // 冒烟/无 shell 环境：不探测注册表（reg.exe 可能被策略拦截）
     if (NO_SHELL_PROBE) return { registered: false, skipped: true };
     const { execFileSync } = require('child_process');
@@ -900,6 +924,7 @@ function registerIpc() {
 
   ipcMain.handle('assoc:register', () => {
     const l = launcherInfo();
+    if (P.IS_MAC) return assoc.registerAssociation(l.target, path.join(LOGO_DIR, 'appicon.icns'), l.args);
     const icoPath = path.join(store.ICON_DIR, 'apkstart.ico');
     if (!fs.existsSync(icoPath)) {
       // 优先用随包分发的多尺寸品牌 ICO，缺失时从 Logo PNG 现算
@@ -999,6 +1024,14 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  // macOS 通过 LaunchServices 的 open-file 事件传文件，不走 argv
+  app.on('open-file', (e, file) => {
+    e.preventDefault();
+    if (!/\.(apk|xapk|apks)$/i.test(file)) return;
+    if (app.isReady()) runInstall(file).catch(() => {});
+    else pendingOpenFile = file;
+  });
+
   app.on('second-instance', (_evt, argv) => {
     const args = parseArgs(argv);
     if (args.launch) { runLaunch(args.launch); return; }
@@ -1017,7 +1050,7 @@ if (!gotLock) {
       isDev: IS_DEV,
       desktopDir: app.getPath('desktop'),
       // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」
-      startMenuDir: path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+      startMenuDir: P.startMenuDir(app.getPath('appData')),
       decodeIcon,
     });
     sharer = new Sharer(runtime);
@@ -1030,7 +1063,7 @@ if (!gotLock) {
     });
 
     // 窗口代理：只负责内嵌模拟器窗口。全局鼠标钩子只在应用窗口前台时按配置安装。
-    winAgent = new WinAgent();
+    winAgent = P.IS_MAC ? new MacAgent() : new WinAgent();
     appWin = new AppWindow({
       agent: winAgent,
       // 旋转要改 Android 的逻辑分辨率，交给 adb 客户端做
@@ -1056,7 +1089,7 @@ if (!gotLock) {
         if (pointer.pointerOptions(store.getSettings()).wheel === 'smooth') wheelRouter.push(m);
       });
       agent.on('exit', () => {
-        const next = new WinAgent();
+        const next = P.IS_MAC ? new MacAgent() : new WinAgent();
         winAgent = next;
         appWin.agent = next;
         attachAgentEvents(next);
@@ -1083,7 +1116,8 @@ if (!gotLock) {
     } catch (_) { /* ignore */ }
 
     const args = parseArgs(process.argv);
-    if (args.apk) runInstall(args.apk).catch(() => {});
+    if (pendingOpenFile) runInstall(pendingOpenFile).catch(() => {});
+    else if (args.apk) runInstall(args.apk).catch(() => {});
     else if (args.launch) await runLaunch(args.launch);
 
     // 首次运行的组件部署延后 20 秒：冷启动那段时间磁盘/CPU 已经打满，
@@ -1123,10 +1157,35 @@ if (!gotLock) {
               console.log('[smoke] settings opened =', opened);
               await new Promise((r) => setTimeout(r, 600));
               const dbg = await mainWindow.webContents.executeJavaScript(
-                "JSON.stringify({ on: document.getElementById('settingsMask').classList.contains('on'), qr: !!document.querySelector('#aboutGroup img'), qrH: (document.querySelector('#aboutGroup img')||{}).naturalHeight, ver: (document.getElementById('aboutVer')||{}).textContent })",
+                `JSON.stringify((() => {
+                  const mask = document.getElementById('settingsMask');
+                  const modal = mask.querySelector('.modal');
+                  const cs = getComputedStyle(modal);
+                  return {
+                    on: mask.classList.contains('on'),
+                    qr: !!document.querySelector('#aboutGroup img'),
+                    qrH: (document.querySelector('#aboutGroup img')||{}).naturalHeight,
+                    ver: (document.getElementById('aboutVer')||{}).textContent,
+                    modalOpacity: cs.opacity,
+                    modalBg: cs.backgroundColor,
+                    animName: cs.animationName,
+                    animState: modal.getAnimations().map(a => a.playState).join(',') || 'none',
+                  };
+                })())`,
               );
               console.log('[smoke] dom =', dbg);
             }
+            // 标题栏安全区自检：macOS 交通灯在左上，logo 必须让到 x>=80 之后；
+            // Windows 则相反，右侧要为系统三键保留 148px。
+            const layout = await mainWindow.webContents.executeJavaScript(`JSON.stringify({
+              cls: document.documentElement.className,
+              padL: getComputedStyle(document.querySelector('.titlebar')).paddingLeft,
+              padR: getComputedStyle(document.querySelector('.titlebar')).paddingRight,
+              logoX: Math.round(document.querySelector('.logo').getBoundingClientRect().left),
+              gearRightGap: Math.round(window.innerWidth - document.getElementById('btnSettings').getBoundingClientRect().right),
+              width: window.innerWidth
+            })`);
+            console.log('[smoke] layout =', layout);
             // 窗口可能被遮挡导致拿到旧帧：强制重绘 + 连拍两帧取后一帧
             const snap = async (file) => {
               mainWindow.webContents.invalidate();

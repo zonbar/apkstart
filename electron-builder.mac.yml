@@ -1,0 +1,77 @@
+# macOS 打包配置。与 Windows 用的 electron-builder.yml 并列，
+# Windows 构建产物与升级通道完全不受影响。
+# 用法：npm run build:mac:arm64 / npm run build:mac:x64 / npm run build:mac
+appId: com.apkstart.mac
+productName: ApkStart
+copyright: Copyright © 2026 ApkStart
+artifactName: ApkStart-${version}-mac-${arch}.${ext}
+
+directories:
+  output: dist/mac-release
+  buildResources: build
+
+# 直接用已安装的 Electron.app 组装，避免构建期再下载一份 zip
+# （离线/受限网络下也能出包）。x64 构建请改用 npm run build:mac:x64。
+electronDist: node_modules/electron/dist
+
+# 源码整块进包（与 Windows 版保持一致，运行时脚本按真实路径读取）
+asar: false
+files:
+  - src/**/*
+  - package.json
+  - LICENSE
+  - "!**/*.map"
+  - "!**/node_modules/**"
+  - "node_modules/@napi-rs/lzma/**"
+  - "node_modules/@napi-rs/lzma-darwin-arm64/**"
+  - "node_modules/@napi-rs/lzma-darwin-x64/**"
+  - "node_modules/@napi-rs/lzma-darwin-universal/**"
+  - "!node_modules/@napi-rs/lzma/*.md"
+  - "!node_modules/@napi-rs/lzma/*.ts"
+  - "!node_modules/@napi-rs/lzma/browser-entry.*"
+
+electronLanguages:
+  - zh-CN
+  - zh-TW
+  - en-US
+
+# 双击 .apk / .xapk / .apks 由 LaunchServices 直接交给本应用，
+# 主进程通过 app.on('open-file') 接收（macOS 不走 argv）。
+fileAssociations:
+  - ext: apk
+    name: Android Package
+    role: Viewer
+    icon: src/ui/assets/appicon.icns
+  - ext: xapk
+    name: Android Split Package
+    role: Viewer
+  - ext: apks
+    name: Android App Bundle Split
+    role: Viewer
+
+mac:
+  category: public.app-category.utilities
+  icon: src/ui/assets/appicon.icns
+  minimumSystemVersion: "11.0"
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  target:
+    - dmg
+    - zip
+  extendInfo:
+    NSHighResolutionCapable: true
+    NSSupportsAutomaticGraphicsSwitching: true
+    LSMultipleInstancesProhibited: true
+
+dmg:
+  backgroundColor: "#f5f5f7"
+  contents:
+    - x: 140
+      y: 220
+      type: file
+    - x: 400
+      y: 220
+      type: link
+      path: /Applications
+
+compression: normal

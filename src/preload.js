@@ -4,6 +4,9 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('apkstart', {
+  // 供界面按平台调整标题栏安全区（macOS 的系统交通灯在左上，Windows 三键在右上）
+  platform: process.platform,
+  isMac: process.platform === 'darwin',
   info: () => invoke('app:info'),
   listApps: () => invoke('apps:list'),
   pickApk: () => invoke('apk:pick'),

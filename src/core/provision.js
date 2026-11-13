@@ -3,7 +3,7 @@
  * 运行时自举（Provisioning）
  *
  * ApkStart 不依赖任何第三方模拟器：adb、QEMU、系统镜像全部由自己下载/校验/管理。
- * 所有运行时文件都放在 %APPDATA%\apkstart\runtime 下，保证在任何安装位置都可写。
+ * 所有运行时文件放在用户数据目录（Windows %APPDATA%\apkstart / macOS ~/Library/Application Support/ApkStart）。
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,12 +12,20 @@ const { spawn, execFile } = require('child_process');
 const store = require('./store');
 const { download, downloadAny, downloadAnyParallel, head } = require('./download');
 const { ZipArchive, ZipFile } = require('./zip');
+const P = require('./platform');
 
 const IS_WIN = process.platform === 'win32';
+const ABI = P.SYSIMG_ABI;                       // arm64-v8a (Apple Silicon) / x86_64
+const EMU_PLATFORM = P.IS_MAC
+  ? (P.IS_ARM ? 'darwin_aarch64' : 'darwin_x64')
+  : 'windows_x64';
+const ABI_ZIP = `${ABI}-34_r14.zip`;
 
 const SOURCES = {
   adb: [
-    'https://dl.google.com/android/repository/platform-tools-latest-windows.zip',
+    P.IS_MAC
+      ? 'https://dl.google.com/android/repository/platform-tools-latest-darwin.zip'
+      : 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip',
   ],
   qemuIndex: 'https://qemu.weilnetz.de/w64/',
   qemuFallback: [
@@ -28,14 +36,15 @@ const SOURCES = {
   sysImgIndexes: [
     'https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml',
     'https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-3.xml',
+    ...(P.IS_MAC ? ['https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml'] : []),
   ],
   aehdFallback: 'https://dl.google.com/android/repository/aehd-windows_v2.2.zip',
-  // 兜底：索引不可用时直接用的已知版本
-  emulatorFallback: 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip',
-  sysimgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
+  // 兜底：索引不可用时直接用的已知版本（与 repository2-3.xml 里的真实包名一致）
+  emulatorFallback: `https://dl.google.com/android/repository/emulator-${EMU_PLATFORM}-16863232.zip`,
+  sysimgFallback: `https://dl.google.com/android/repository/sys-img/google_apis_playstore/${ABI_ZIP}`,
   // ARM 兼容镜像（Google Play 版，内置 native bridge）
   playImgIndex: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml',
-  playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
+  playImgFallback: `https://dl.google.com/android/repository/sys-img/google_apis_playstore/${ABI_ZIP}`,
   // Android-x86 9.0-r2（x86_64）：仅在用户已自备 ISO 时使用
   iso: [
     'https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1',
@@ -76,7 +85,7 @@ function absUrl(u, base = REPO_BASE) {
  * 现在统一为 Android 14 Google Play x86_64：x86 应用、ARM 应用、GMS 都能跑，
  * 全机只存一份只读基础层（容器式共享），按需下载一次即可。
  */
-const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: 'x86_64' };
+const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: P.SYSIMG_ABI };
 const DEFAULT_SYSIMG = PLAY_SYSIMG;
 
 const MIN_SIZE = {
@@ -131,13 +140,13 @@ class Provisioner {
     return {
       root,
       qemuDir: path.join(root, 'qemu'),
-      qemuExe: path.join(root, 'qemu', 'qemu-system-x86_64.exe'),
-      qemuImg: path.join(root, 'qemu', 'qemu-img.exe'),
+      qemuExe: path.join(root, 'qemu', P.exe('qemu-system-x86_64')),
+      qemuImg: path.join(root, 'qemu', P.exe('qemu-img')),
       adbDir: path.join(root, 'platform-tools'),
-      adbExe: path.join(root, 'platform-tools', 'adb.exe'),
+      adbExe: path.join(root, 'platform-tools', P.exe('adb')),
       // emulator 运行时（Google 官方）：root 同时充当 ANDROID_SDK_ROOT
       emulatorDir: path.join(root, 'emulator'),
-      emulatorExe: path.join(root, 'emulator', 'emulator.exe'),
+      emulatorExe: path.join(root, 'emulator', P.exe('emulator')),
       sysImgRoot: sysRoot,
       sysImgDir: path.join(sysRoot, `android-${sysApi}`, sysTag, sysAbi),
       avdHome: insideData ? path.join(root, 'avd') : writable,
@@ -162,6 +171,7 @@ class Provisioner {
 
   async hypervisor() {
     if (this._hypervisor !== null) return this._hypervisor;
+    if (P.IS_MAC) { this._hypervisor = P.hypervisor(); return this._hypervisor; }
     if (!IS_WIN) { this._hypervisor = { whpx: false, note: '非 Windows 平台' }; return this._hypervisor; }
     // 只做毫秒级的文件检查。真正"WHPX 是否可用"由 emulator -accel-check 给出权威答案，
     // 避免在这里拉起 PowerShell（冷启动 1-2 秒）拖慢每次状态轮询。
@@ -181,7 +191,7 @@ class Provisioner {
     // 30s 缓存，避免状态轮询频繁拉起外部进程
     if (this._adbCache && Date.now() - this._adbCache.at < 30000) return this._adbCache.value;
     const { adbExe, adbDir } = this.paths();
-    const candidates = [adbExe, path.join(this.appRoot, 'tools', 'platform-tools', 'adb.exe')];
+    const candidates = [adbExe, path.join(this.appRoot, 'tools', 'platform-tools', P.exe('adb'))];
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
       const r = await run(c, ['version'], { timeout: 10000 });
@@ -202,8 +212,13 @@ class Provisioner {
     const candidates = [
       p.qemuExe,
       store.getSettings().runtime.qemuPath,
-      'C:\\Program Files\\qemu\\qemu-system-x86_64.exe',   // winget 默认安装位置
-      path.join(this.appRoot, 'engine', 'qemu', 'qemu-system-x86_64.exe'),
+      ...(P.IS_MAC ? [
+        '/opt/homebrew/bin/qemu-system-x86_64',
+        '/usr/local/bin/qemu-system-x86_64',
+      ] : [
+        'C:\\Program Files\\qemu\\qemu-system-x86_64.exe',   // winget 默认安装位置
+        path.join(this.appRoot, 'engine', 'qemu', 'qemu-system-x86_64.exe'),
+      ]),
     ].filter(Boolean);
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
@@ -364,6 +379,10 @@ class Provisioner {
         } else {
           fs.writeFileSync(target, zip.read(name));
         }
+        // 自研 ZIP 解析器不保留 unix mode；macOS 上 adb / emulator / qemu 必须可执行
+        if (P.IS_MAC && !path.extname(name)) {
+          try { fs.chmodSync(target, 0o755); } catch (_) { /* ignore */ }
+        }
         done += 1;
         if (opts.onEntry) opts.onEntry(name, done, total);
       }
@@ -398,10 +417,13 @@ class Provisioner {
       if (block) {
         const base = baseOf(SOURCES.sdkIndex);
         const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base));
-        const win = urls.find((u) => /windows_x64.*\.zip$/i.test(u));
-        if (win) {
-          this._cache.emulatorUrl = win;
-          return win;
+        const re = P.IS_MAC
+          ? new RegExp(`emulator-${EMU_PLATFORM}.*\\.zip$`, 'i')
+          : /windows_x64.*\.zip$/i;
+        const hit = urls.find((u) => re.test(u));
+        if (hit) {
+          this._cache.emulatorUrl = hit;
+          return hit;
         }
       }
     } catch (_) { /* 落兜底 */ }
@@ -424,7 +446,7 @@ class Provisioner {
         if (block) {
           const base = baseOf(idx);
           const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
-            .filter((u) => /x86_64.*\.zip$/i.test(u));
+            .filter((u) => new RegExp(`${ABI}.*\\.zip$`, 'i').test(u));
           if (urls.length) {
             this._cache.sysimgUrl = urls[urls.length - 1];
             return this._cache.sysimgUrl;
@@ -441,7 +463,7 @@ class Provisioner {
       return this._cache.emulatorVersion;
     }
     const p = this.paths();
-    const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
+    const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', P.exe('emulator'))];
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
       // eslint-disable-next-line no-await-in-loop
@@ -590,7 +612,7 @@ class Provisioner {
     }
     const p = this.paths();
     const exe = fs.existsSync(p.emulatorExe) ? p.emulatorExe
-      : path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe');
+      : path.join(this.appRoot, 'engine', 'emulator', P.exe('emulator'));
     if (!fs.existsSync(exe)) return { ok: false, kind: 'none', note: '未安装 emulator' };
 
     const aehdSys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'aehd.sys');
@@ -603,8 +625,10 @@ class Provisioner {
 
     let result;
     if (usable) {
-      const kind = hasAehdFile && /aehd/i.test(text) ? 'aehd' : 'whpx';
-      result = { ok: true, kind, note: kind === 'whpx' ? 'WHPX 硬件加速已启用' : 'AEHD 硬件加速已启用' };
+      const kind = P.IS_MAC ? 'hvf' : (hasAehdFile && /aehd/i.test(text) ? 'aehd' : 'whpx');
+      const label = P.IS_MAC ? 'HVF 硬件加速已启用'
+        : (kind === 'whpx' ? 'WHPX 硬件加速已启用' : 'AEHD 硬件加速已启用');
+      result = { ok: true, kind, note: label };
     } else if (hasAehdFile && /aehd/i.test(text) && !/ERROR_ACCESS_DENIED/i.test(text)) {
       result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用' };
     } else if (hv.dll && /whpx/i.test(text) && !/error|denied/i.test(text)) {
@@ -616,7 +640,9 @@ class Provisioner {
         whpx: hv.whpx,
         aehdInstalled: hasAehdFile,
         viaTcg: true,
-        note: '未启用硬件加速：将回退软件模拟（能跑但很慢）。建议安装 AEHD 驱动或开启「虚拟机平台」',
+        note: P.IS_MAC
+          ? '未启用硬件加速：将回退软件模拟（能跑但很慢）。请确认系统支持 Apple Hypervisor Framework'
+          : '未启用硬件加速：将回退软件模拟（能跑但很慢）。建议安装 AEHD 驱动或开启「虚拟机平台」',
       };
     }
     this._cache.accel = result;
@@ -667,11 +693,15 @@ class Provisioner {
       path.join(this.appRoot, 'engine', 'platform-tools'),
       path.join(this.appRoot, 'tools', 'platform-tools'),
       path.dirname(this.adbVersionPath() || ''),
-    ].find((d) => d && fs.existsSync(path.join(d, 'adb.exe')));
+    ].find((d) => d && fs.existsSync(path.join(d, P.exe('adb'))));
     if (!src) return false;
-    for (const f of ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']) {
+    const files = P.IS_MAC ? [P.exe('adb')] : ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll'];
+    for (const f of files) {
       const from = path.join(src, f);
-      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(p.adbDir, f));
+      if (!fs.existsSync(from)) continue;
+      const to = path.join(p.adbDir, f);
+      fs.copyFileSync(from, to);
+      if (P.IS_MAC) { try { fs.chmodSync(to, 0o755); } catch (_) { /* ignore */ } }
     }
     return fs.existsSync(p.adbExe);
   }
@@ -711,7 +741,7 @@ class Provisioner {
       if (block) {
         const base = baseOf(SOURCES.playImgIndex);
         const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
-          .filter((u) => /x86_64.*\.zip$/i.test(u));
+          .filter((u) => new RegExp(`${ABI}.*\\.zip$`, 'i').test(u));
         if (urls.length) {
           this._cache.playUrl = urls[urls.length - 1];
           return this._cache.playUrl;
@@ -766,6 +796,7 @@ class Provisioner {
 
   /** 下载 AEHD 驱动（小文件）；安装需要管理员权限，交给引导流程 */
   async installAehd(onProgress = () => {}) {
+    if (P.IS_MAC) return { ok: true, note: 'macOS 使用系统内置 HVF，无需 AEHD 驱动' };
     const p = this.ensureDirs();
     const zip = path.join(p.tmp, 'aehd.zip');
     onProgress({ stage: 'download', message: '下载 AEHD 驱动…', percent: 10 });
@@ -808,6 +839,7 @@ class Provisioner {
   }
 
   async installQemu(onProgress = () => {}) {
+    if (P.IS_MAC) return { ok: true, note: 'macOS 使用 Android Emulator 自带的 QEMU，无需单独安装' };
     const p = this.ensureDirs();
     const setup = path.join(p.tmp, 'qemu-setup.exe');
 
@@ -840,7 +872,7 @@ class Provisioner {
 
     const v = await this.qemuVersion();
     if (!v.ok) {
-      throw new Error('QEMU 安装后未找到 qemu-system-x86_64.exe：可手动下载 QEMU 并解压到 engine/qemu/');
+      throw new Error(`QEMU 安装后未找到 ${P.exe('qemu-system-x86_64')}：可手动下载 QEMU 并解压到 engine/qemu/`);
     }
     fs.rmSync(setup, { force: true });
     this._cache.qemuVersion = v.version;
@@ -923,14 +955,14 @@ class Provisioner {
     onProgress({ stage: 'disk', message: `创建 ${sizeGB}GB 虚拟磁盘…`, percent: 40 });
     const qemuImg = fs.existsSync(p.qemuImg)
       ? p.qemuImg
-      : path.join(path.dirname(store.getSettings().runtime.qemuPath || ''), 'qemu-img.exe');
+      : path.join(path.dirname(store.getSettings().runtime.qemuPath || ''), P.exe('qemu-img'));
 
     const tool = fs.existsSync(qemuImg) ? qemuImg : null;
     if (tool) {
       const r = await run(tool, ['create', '-f', 'qcow2', dest, `${sizeGB}G`], { timeout: 120000 });
       if (!r.ok) throw new Error(`qemu-img 创建虚拟磁盘失败：${r.stderr || r.stdout}`);
     } else {
-      throw new Error('未找到 qemu-img.exe，请先安装 QEMU');
+      throw new Error(`未找到 ${P.exe('qemu-img')}，请先安装 QEMU`);
     }
     store.saveSettings({ runtime: { diskPath: dest } });
     onProgress({ stage: 'done', message: '虚拟磁盘已创建', percent: 100, path: dest });

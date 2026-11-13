@@ -34,9 +34,9 @@ const log = (p) => console.log(`[${p.stage}] ${p.message} ${p.percent != null ? 
   await prov.installPlayImage(log);
 
   const ok =
-    fs.existsSync(path.join(outRoot, 'emulator', 'emulator.exe')) &&
-    fs.existsSync(path.join(outRoot, 'platform-tools', 'adb.exe')) &&
-    fs.existsSync(path.join(outRoot, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64', 'system.img'));
+    fs.existsSync(path.join(outRoot, 'emulator', require('../src/core/platform').exe('emulator'))) &&
+    fs.existsSync(path.join(outRoot, 'platform-tools', require('../src/core/platform').exe('adb'))) &&
+    fs.existsSync(path.join(outRoot, 'system-images', 'android-34', 'google_apis_playstore', require('../src/core/platform').SYSIMG_ABI, 'system.img'));
   if (!ok) throw new Error('运行时组装后校验失败');
 
   // 容器式精简：只保留 x86_64 的 QEMU 与无头运行必需的组件。

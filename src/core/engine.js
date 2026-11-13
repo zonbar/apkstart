@@ -17,6 +17,7 @@ const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
 const doctor = require('./doctor');
 const container = require('./container');
+const P = require('./platform');
 
 const LOG_DIR = path.join(store.DATA_DIR, 'logs');
 const MONITOR_PORT = 5556;
@@ -79,7 +80,7 @@ class Runtime {
     const p = this.provisioner.paths();
     if (s.adbPath && fs.existsSync(s.adbPath)) return s.adbPath;
     if (fs.existsSync(p.adbExe)) return p.adbExe;
-    const local = path.join(this.appRoot, 'tools', 'platform-tools', 'adb.exe');
+    const local = path.join(this.appRoot, 'tools', 'platform-tools', P.exe('adb'));
     if (fs.existsSync(local)) return local;
     return AdbClient.resolveAdb('', this.appRoot);
   }
@@ -203,11 +204,11 @@ class Runtime {
     const hv = this._hv || { whpx: false };
     const disk = s.runtime.diskPath || p.disk;
     const iso = s.runtime.isoPath || p.iso;
-    const accel = hv.whpx ? 'whpx' : 'tcg';
+    const accel = hv.whpx ? P.ACCEL_NAME : 'tcg';
 
     const args = [
       '-name', 'ApkStart Runtime',
-      '-machine', `q35,accel=${accel}`,
+      '-machine', P.IS_MAC ? `virt,accel=${accel}` : `q35,accel=${accel}`,
       '-cpu', hv.whpx ? 'host' : 'max',
       '-smp', String(Math.max(2, s.engine.cores || 4)),
       '-m', String(s.engine.memoryMB || 4096),
@@ -317,7 +318,7 @@ class Runtime {
     const out = fs.openSync(logFile, 'a');
     fs.writeSync(out, `\n\n=== ${new Date().toISOString()} ${install ? 'INSTALL' : 'BOOT'} ===\n${env.qemu.path} ${args.join(' ')}\n`);
 
-    onLog(`启动运行时（${env.hypervisor.whpx ? 'WHPX 硬件加速' : '纯软件模拟'}）…`);
+    onLog(`启动运行时（${env.hypervisor.whpx ? (P.IS_MAC ? 'HVF 硬件加速' : 'WHPX 硬件加速') : '纯软件模拟'}）…`);
     if (!env.hypervisor.whpx) onLog(env.hypervisor.note);
 
     const proc = spawn(env.qemu.path, args, {
@@ -471,11 +472,7 @@ class Runtime {
         const m = /:(\d+)$/.exec(this.emuSerial);
         const port = m ? Number(m[1]) - 1 : this.emulator.port;
         const pid = await this.pidOnPort(port);
-        if (pid) {
-          await new Promise((resolve) => {
-            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
-          });
-        }
+        if (pid) await P.killTree(pid);
       }
       this._activeApps.clear();
       return true;
@@ -577,25 +574,12 @@ class Runtime {
    * 找出 qemu 监听的所有 TCP 端口，一个都不会漏。
    */
   async emulatorPorts() {
-    const run = (cmd, args) => new Promise((resolve) => {
-      const { execFile } = require('child_process');
-      execFile(cmd, args, { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, out) => {
-        resolve(err ? '' : String(out || ''));
-      });
-    });
     const ports = new Set();
     try {
-      const tl = await run('tasklist', ['/FO', 'CSV', '/NH']);
-      const pids = new Set();
-      for (const line of tl.split('\n')) {
-        const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
-        if (m && /qemu|emulator/i.test(m[1])) pids.add(m[2]);
-      }
-      if (!pids.size) return [];
-      const ns = await run('netstat', ['-ano', '-p', 'TCP']);
-      for (const line of ns.split('\n')) {
-        const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
-        if (m && pids.has(m[2])) ports.add(Number(m[1]));
+      const [procs, rows] = await Promise.all([P.processList(), P.listeningPorts()]);
+      const pids = new Set(procs.filter((p) => /qemu|emulator/i.test(p.name)).map((p) => String(p.pid)));
+      for (const row of rows) {
+        if (pids.has(String(row.pid))) ports.add(row.port);
       }
     } catch (_) { /* 退回到端口探测 */ }
 
@@ -646,12 +630,7 @@ class Runtime {
         // AVD 目录有锁：留着这台会让新实例直接退出，表现成"怎么都开不了机"。
         // adb 都连不上了，只能按控制台端口找到进程强杀。
         const pid = await this.pidOnPort(port);
-        if (pid) {
-          await new Promise((resolve) => {
-            const { execFile } = require('child_process');
-            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
-          });
-        }
+        if (pid) await P.killTree(pid);
         await new Promise((r) => setTimeout(r, 1200));
         continue;
       }
@@ -668,15 +647,7 @@ class Runtime {
 
   /** 某个 TCP 端口是哪个进程在监听（用于强杀卡死的模拟器） */
   async pidOnPort(port) {
-    return new Promise((resolve) => {
-      const { execFile } = require('child_process');
-      execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true }, (err, stdout) => {
-        if (err || !stdout) return resolve(0);
-        const line = stdout.split('\n').find((l) => new RegExp(`:${port}\\s`).test(l) && /LISTENING/i.test(l));
-        const m = line && /(\d+)\s*$/.exec(line.trim());
-        return resolve(m ? Number(m[1]) : 0);
-      });
-    });
+    return P.pidOnPort(port);
   }
 
   /**

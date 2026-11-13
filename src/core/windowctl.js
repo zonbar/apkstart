@@ -85,6 +85,10 @@ async function present(o) {
 async function focus(pid) { return call({ pid, action: 'focus' }); }
 
 /** 通知资源管理器刷新图标/快捷方式，避免新建的桌面图标要按 F5 才出现 */
-async function refreshShell() { return call({ pid: 0, action: 'refresh' }); }
+async function refreshShell() {
+  const P = require('./platform');
+  if (P.IS_MAC) return P.refreshShell();
+  return call({ pid: 0, action: 'refresh' });
+}
 
 module.exports = { call, getBounds, present, focus, refreshShell, SCRIPT };

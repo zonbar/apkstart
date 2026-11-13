@@ -51,7 +51,8 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   groupOf('platform-tools', path.join(root, 'platform-tools'));
 
   // 1) QEMU 只需要 x86_64 一个目标；包里另外 7 个架构的二进制纯属浪费
-  const qemuDir = path.join(root, 'emulator', 'qemu', 'windows-x86_64');
+  const P = require('./platform');
+  const qemuDir = path.join(root, 'emulator', 'qemu', P.IS_MAC ? (P.IS_ARM ? 'darwin-aarch64' : 'darwin-x86_64') : 'windows-x86_64');
   if (exists(qemuDir)) {
     for (const f of walk(qemuDir)) {
       if (/qemu-system-(aarch64|armel|i386)/i.test(path.basename(f.path))) {
@@ -114,7 +115,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   // 实测删掉会直接起不来，绝不能放进清单；qsn/netsim 也可能被快照与网络功能按需调用，保守保留。
   if (aggressive) {
     const extras = [
-      ['emulator/crashreport.exe', '崩溃上报工具（无头运行不需要）'],
+      [`emulator/crashreport${P.EXE_SUFFIX}`, '崩溃上报工具（无头运行不需要）'],
     ];
     for (const [rel, reason] of extras) {
       const p = path.join(root, rel);

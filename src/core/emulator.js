@@ -16,6 +16,7 @@ const path = require('path');
 const store = require('./store');
 const { Provisioner } = require('./provision');
 const doctor = require('./doctor');
+const P = require('./platform');
 
 const AVD_NAME = 'apkstart';
 const SNAPSHOT_NAME = 'apkstart';
@@ -50,7 +51,7 @@ class EmulatorEngine {
   /** emulator.exe 与系统镜像目录（优先用户运行时目录，回退到仓库内 engine/） */
   locate() {
     const p = this.provisioner.paths();
-    const emuCandidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
+    const emuCandidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', P.exe('emulator'))];
     const emulatorExe = emuCandidates.find((c) => fs.existsSync(c)) || '';
     const img = this.provisioner.systemImageInfo();
     return { emulatorExe, sysImgDir: img.dir, sysImgOk: img.ok, root: emulatorExe ? path.dirname(path.dirname(emulatorExe)) : p.root };
@@ -61,7 +62,7 @@ class EmulatorEngine {
     const play = this.provisioner.playImageInfo();
     const base = this.provisioner.systemImageInfo();
     if (play.ok) {
-      return { compat: true, api: play.api, tag: play.tag, dir: play.dir, abi: 'x86_64' };
+      return { compat: true, api: play.api, tag: play.tag, dir: play.dir, abi: P.SYSIMG_ABI };
     }
     return { compat: false, api: base.api, tag: base.tag, dir: base.dir, abi: base.abi || this.provisioner.paths().sysAbi };
   }
@@ -116,7 +117,29 @@ class EmulatorEngine {
    * 按「AVD 锁里的 pid」+「命令行带本 AVD 名的 qemu/emulator」两个来源清。
    */
   async killOrphanProcesses({ onLog = () => {} } = {}) {
-    if (process.platform !== 'win32') return 0;
+    if (process.platform !== 'win32') {
+      if (!P.IS_MAC) return 0;
+      // macOS：AVD 锁里的 pid + ps 里名字含 qemu/emulator 的残留进程
+      const macAvdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+      const macPids = new Set();
+      try {
+        const f = path.join(macAvdDir, 'hardware-qemu.ini.lock', 'pid');
+        if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+          const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+          if (pid) macPids.add(pid);
+        }
+      } catch (_) { /* ignore */ }
+      for (const p of (await P.processList())) {
+        if (/qemu|emulator/i.test(p.name) && p.pid !== process.pid) macPids.add(p.pid);
+      }
+      macPids.delete(process.pid);
+      if (!macPids.size) { this.clearLocks(macAvdDir); return 0; }
+      onLog(`清理 ${macPids.size} 个残留模拟器进程`);
+      await Promise.all([...macPids].map((pid) => P.killTree(pid)));
+      await sleep(1200);
+      this.clearLocks(macAvdDir);
+      return macPids.size;
+    }
     const { execFile } = require('child_process');
     const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
     const pids = new Set();
@@ -393,6 +416,7 @@ class EmulatorEngine {
    * level: idle（容器停放）| below（有应用在前台）| normal（性能优先）。
    */
   setPriority(level = 'below') {
+    if (P.IS_MAC) return P.setPriority(level, AVD_NAME);
     if (process.platform !== 'win32') return Promise.resolve(0);
     const script = path.join(__dirname, 'win', 'priority.ps1');
     if (!fs.existsSync(script)) return Promise.resolve(0);
@@ -413,8 +437,10 @@ class EmulatorEngine {
     this.proc = null;
     if (proc) {
       try { proc.kill(); } catch (_) { /* ignore */ }
-      if (process.platform === 'win32' && proc.pid) {
+      if (P.IS_WIN && proc.pid) {
         try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (_) { /* ignore */ }
+      } else if (P.IS_MAC && proc.pid) {
+        P.killTree(proc.pid).catch(() => {});
       }
     }
     await sleep(800);
